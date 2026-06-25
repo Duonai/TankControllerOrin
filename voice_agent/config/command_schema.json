@@ -1,0 +1,22 @@
+{
+  "type": "object",
+  "required": ["role", "result"],
+  "additionalProperties": false,
+  "properties": {
+    "role": {
+      "type": "string",
+      "enum": ["player3_voice"]
+    },
+    "result": {
+      "type": "object",
+      "required": ["command"],
+      "additionalProperties": false,
+      "properties": {
+        "command": {
+          "type": "string",
+          "enum": ["reload", "scanning", "reject"]
+        }
+      }
+    }
+  }
+}

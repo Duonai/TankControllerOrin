@@ -1,0 +1,48 @@
+# Project identity
+.DS_Store
+Thumbs.db
+
+# Python caches
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Local generated audio and logs
+voice_agent/audio/*.wav
+voice_agent/audio/*.mp3
+voice_agent/audio/*.flac
+voice_agent/audio/*.ogg
+*.log
+
+# Large local model and build dependencies
+Qwen3-4B-Instruct-2507-Q6_K/
+llama.cpp/
+whisper.cpp/
+
+# Separate external project
+TankControllerRasberryPi/
+
+# Large generic artifacts
+*.gguf
+*.bin
+*.pt
+*.pth
+*.onnx
+*.ckpt
+*.safetensors
+*.tar
+*.tar.gz
+*.zip
+*.7z
+
+# Notebook checkpoints
+.ipynb_checkpoints/

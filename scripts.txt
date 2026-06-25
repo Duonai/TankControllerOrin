@@ -1,0 +1,14 @@
+./build/bin/llama-server \
+  -m /home/usr1/bootcamp_ws/Qwen3-4B-Instruct-2507-Q6_K/Qwen_Qwen3-4B-Instruct-2507-Q6_K.gguf \
+  -ngl 999 \
+  -c 8192 \
+  -fa auto \
+  --host 0.0.0.0 \
+  --port 8080
+
+./build/bin/llama-server \
+  -m /home/usr1/bootcamp_ws/Qwen3-4B-Instruct-2507-Q6_K/Qwen_Qwen3-4B-Instruct-2507-Q6_K.gguf \
+  -ngl 999 \
+  -c 8192 \
+  --host 0.0.0.0 \
+  --port 8080
