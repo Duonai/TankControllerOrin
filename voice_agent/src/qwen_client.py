@@ -80,35 +80,50 @@ def validate_command_schema(parsed_json: dict[str, Any] | None, schema: dict[str
     if parsed_json is None:
         raise QwenError("Qwen response did not contain valid JSON")
 
-    if not isinstance(parsed_json, dict):
-        raise QwenError("Qwen JSON response must be an object")
+    _validate_schema_value(parsed_json, schema, path="$")
 
-    required_top_level = set(schema.get("required", []))
-    actual_top_level = set(parsed_json.keys())
-    if actual_top_level != required_top_level:
-        raise QwenError(f"Qwen JSON keys must be exactly {sorted(required_top_level)}, got {sorted(actual_top_level)}")
 
-    role_rules = schema.get("properties", {}).get("role", {})
-    allowed_roles = role_rules.get("enum", [])
-    role = parsed_json.get("role")
-    if role not in allowed_roles:
-        raise QwenError(f"Qwen role must be one of {allowed_roles}, got {role!r}")
+def _validate_schema_value(value: Any, schema: dict[str, Any], path: str) -> None:
+    expected_type = schema.get("type")
 
-    result = parsed_json.get("result")
-    if not isinstance(result, dict):
-        raise QwenError("Qwen result must be an object")
+    if expected_type == "object":
+        if not isinstance(value, dict):
+            raise QwenError(f"Qwen JSON at {path} must be an object")
 
-    result_rules = schema.get("properties", {}).get("result", {})
-    required_result_keys = set(result_rules.get("required", []))
-    actual_result_keys = set(result.keys())
-    if actual_result_keys != required_result_keys:
-        raise QwenError(f"Qwen result keys must be exactly {sorted(required_result_keys)}, got {sorted(actual_result_keys)}")
+        properties = schema.get("properties", {})
+        required_keys = set(schema.get("required", []))
+        actual_keys = set(value.keys())
 
-    command_rules = result_rules.get("properties", {}).get("command", {})
-    allowed_commands = command_rules.get("enum", [])
-    command = result.get("command")
-    if command not in allowed_commands:
-        raise QwenError(f"Qwen command must be one of {allowed_commands}, got {command!r}")
+        missing_keys = sorted(required_keys - actual_keys)
+        if missing_keys:
+            raise QwenError(f"Qwen JSON at {path} is missing required keys: {missing_keys}")
+
+        if schema.get("additionalProperties", True) is False:
+            unexpected_keys = sorted(actual_keys - set(properties.keys()))
+            if unexpected_keys:
+                raise QwenError(f"Qwen JSON at {path} has unexpected keys: {unexpected_keys}")
+
+        for key, child_schema in properties.items():
+            if key in value:
+                _validate_schema_value(value[key], child_schema, path=f"{path}.{key}")
+        return
+
+    if expected_type == "string":
+        if not isinstance(value, str):
+            raise QwenError(f"Qwen JSON at {path} must be a string")
+    elif expected_type == "number":
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise QwenError(f"Qwen JSON at {path} must be a number")
+    elif expected_type == "integer":
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise QwenError(f"Qwen JSON at {path} must be an integer")
+    elif expected_type == "boolean":
+        if not isinstance(value, bool):
+            raise QwenError(f"Qwen JSON at {path} must be a boolean")
+
+    allowed_values = schema.get("enum")
+    if allowed_values is not None and value not in allowed_values:
+        raise QwenError(f"Qwen JSON at {path} must be one of {allowed_values}, got {value!r}")
 
 
 def _extract_json_block(text: str) -> str:

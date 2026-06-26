@@ -9,12 +9,15 @@
     },
     "result": {
       "type": "object",
-      "required": ["command"],
+      "required": ["command", "data"],
       "additionalProperties": false,
       "properties": {
         "command": {
           "type": "string",
-          "enum": ["reload", "scanning", "reject"]
+          "enum": ["move_forward", "move_backward", "pivot_left", "pivot_right", "reload", "scanning", "reject"]
+        },
+        "data": {
+          "type": "number"
         }
       }
     }
