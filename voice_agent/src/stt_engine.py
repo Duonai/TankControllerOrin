@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import os
 import shutil
 import subprocess
 import tempfile
@@ -40,27 +41,76 @@ class WhisperCppTranscriber:
     def record_audio(self, output_path: Path, seconds: float, device: str = "default") -> Path:
         if shutil.which("arecord") is None:
             raise SttError("arecord not found in PATH")
+        if seconds <= 0:
+            raise SttError("recording duration must be positive")
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        duration_seconds = max(1, math.ceil(seconds))
         command = [
             "arecord",
             "-D",
             device,
-            "-d",
-            str(duration_seconds),
             "-f",
             "S16_LE",
             "-r",
             "16000",
             "-c",
             "1",
-            str(output_path),
+            "-t",
+            "raw",
         ]
+
+        sample_rate = 16000
+        chunk_duration_seconds = 0.1
+        chunk_samples = int(sample_rate * chunk_duration_seconds)
+        chunk_bytes = chunk_samples * 2
+        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+        total_seconds = 0.0
         try:
-            subprocess.run(command, check=True, capture_output=True, text=True)
-        except subprocess.CalledProcessError as exc:
-            raise SttError(exc.stderr.strip() or exc.stdout.strip() or "audio recording failed") from exc
+            with wave.open(str(output_path), "wb") as wav_file:
+                wav_file.setnchannels(1)
+                wav_file.setsampwidth(2)
+                wav_file.setframerate(sample_rate)
+
+                while total_seconds < seconds:
+                    if process.stdout is None:
+                        raise SttError("audio capture stream is unavailable")
+
+                    remaining_seconds = max(seconds - total_seconds, 0.0)
+                    target_bytes = chunk_bytes if remaining_seconds >= chunk_duration_seconds else max(2, int(remaining_seconds * sample_rate) * 2)
+                    chunk = process.stdout.read(target_bytes)
+                    if not chunk:
+                        break
+
+                    wav_file.writeframes(chunk)
+                    total_seconds += len(chunk) / 2 / sample_rate
+        finally:
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=1.0)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=1.0)
+
+        stderr_output = ""
+        if process.stderr is not None:
+            stderr_output = process.stderr.read().decode("utf-8", errors="replace").strip()
+
+        if process.returncode is None:
+            process.wait(timeout=1.0)
+
+        terminated_by_us = "Aborted by signal Terminated" in stderr_output
+        has_audio_output = output_path.exists() and output_path.stat().st_size > 44
+
+        if terminated_by_us and has_audio_output:
+            stderr_output = ""
+
+        if process.returncode not in (0, -15, 143) and not (terminated_by_us and has_audio_output):
+            raise SttError(stderr_output or f"audio recording failed with exit code {process.returncode}")
+
+        if not output_path.exists() or output_path.stat().st_size <= 44:
+            raise SttError("recording produced no audio")
 
         return output_path
 
@@ -207,8 +257,13 @@ class WhisperCppTranscriber:
             if self.config.prompt.strip():
                 command.extend(["--prompt", self.config.prompt.strip()])
 
+            run_env = os.environ.copy()
+            library_dir = str(self.config.whisper_bin.resolve().parent)
+            existing_library_path = run_env.get("LD_LIBRARY_PATH", "")
+            run_env["LD_LIBRARY_PATH"] = library_dir if not existing_library_path else f"{library_dir}:{existing_library_path}"
+
             try:
-                subprocess.run(command, check=True, capture_output=True, text=True)
+                subprocess.run(command, check=True, capture_output=True, text=True, env=run_env)
             except subprocess.CalledProcessError as exc:
                 raise SttError(exc.stderr.strip() or exc.stdout.strip() or "speech transcription failed") from exc
 

@@ -34,11 +34,12 @@ Ignored large or external components:
 Current validated flow:
 
 1. Record microphone input on the Orin board.
-2. Optionally auto-stop after trailing silence.
-3. Convert speech to text with `whisper.cpp`.
-4. Send transcript to local Qwen running on `llama-server`.
-5. Parse fixed JSON output.
-6. If command is not `reject`, optionally send it to the TankController TCP server.
+2. Optionally stay in standby mode and wait for a keyboard trigger.
+3. Optionally auto-stop after trailing silence.
+4. Convert speech to text with `whisper.cpp`.
+5. Send transcript to local Qwen running on `llama-server`.
+6. Parse fixed JSON output.
+7. If command is not `reject`, optionally send it to the TankController TCP server.
 
 ## Qwen Output Contract
 
@@ -79,9 +80,9 @@ Expected local assets and tools:
 Start the local Qwen server:
 
 ```bash
-cd /home/usr1/bootcamp_ws/llama.cpp
+cd /home/usr1/TankControllerOrin/llama.cpp
 ./build/bin/llama-server \
-  -m /home/usr1/bootcamp_ws/Qwen3-4B-Instruct-2507-Q6_K/Qwen_Qwen3-4B-Instruct-2507-Q6_K.gguf \
+  -m /home/usr1/TankControllerOrin/Qwen3-4B-Instruct-2507-Q6_K/Qwen_Qwen3-4B-Instruct-2507-Q6_K.gguf \
   -ngl 999 \
   -c 8192 \
   -fa auto \
@@ -94,7 +95,7 @@ cd /home/usr1/bootcamp_ws/llama.cpp
 Text-only test:
 
 ```bash
-cd /home/usr1/bootcamp_ws
+cd /home/usr1/TankControllerOrin
 /home/usr1/.local/share/uv/python/cpython-3.14.3-linux-aarch64-gnu/bin/python \
   voice_agent/run_voice_to_qwen.py \
   --text '재장전해'
@@ -103,7 +104,7 @@ cd /home/usr1/bootcamp_ws
 Microphone test with auto-stop:
 
 ```bash
-cd /home/usr1/bootcamp_ws
+cd /home/usr1/TankControllerOrin
 /home/usr1/.local/share/uv/python/cpython-3.14.3-linux-aarch64-gnu/bin/python \
   voice_agent/run_voice_to_qwen.py \
   --record-seconds 5 \
@@ -112,12 +113,38 @@ cd /home/usr1/bootcamp_ws
   --language ko
 ```
 
+Standby loop with keyboard-triggered recording and automatic Qwen startup:
+
+```bash
+cd /home/usr1/TankControllerOrin
+/home/usr1/.local/share/uv/python/cpython-3.14.3-linux-aarch64-gnu/bin/python \
+  voice_agent/run_voice_pipeline.py \
+  --start-qwen \
+  --record-seconds 5 \
+  --auto-stop \
+  --silence-stop-seconds 0.6 \
+  --trigger-key space \
+  --quit-key q \
+  --send-command \
+  --tank-profile local
+```
+
+Behavior of the standby loop:
+
+- Reuse an already-running Qwen server if `/health` is available.
+- Otherwise start `llama-server` locally when `--start-qwen` is enabled.
+- Wait for an immediate keyboard trigger instead of running STT for wake-word detection.
+- When the trigger key is pressed, print a clear log message and terminal bell, then start command capture.
+- Wait until Qwen parsing and optional command send finish, then return to standby mode.
+- If TankController sending fails, log the send error and return to standby mode without terminating the loop.
+- Press the quit key to leave standby mode cleanly.
+
 ## Sending Commands to TankController
 
 To send non-reject commands using the TankController TCP transport:
 
 ```bash
-cd /home/usr1/bootcamp_ws
+cd /home/usr1/TankControllerOrin
 /home/usr1/.local/share/uv/python/cpython-3.14.3-linux-aarch64-gnu/bin/python \
   voice_agent/run_voice_to_qwen.py \
   --text '재장전해' \
@@ -127,14 +154,14 @@ cd /home/usr1/bootcamp_ws
 For local loopback testing with a local TankController server:
 
 ```bash
-cd /home/usr1/bootcamp_ws/TankControllerRasberryPi
+cd /home/usr1/TankControllerOrin/TankControllerRasberryPi
 /home/usr1/.local/share/uv/python/cpython-3.14.3-linux-aarch64-gnu/bin/python run_pc_server.py --profile local
 ```
 
 Then in another terminal:
 
 ```bash
-cd /home/usr1/bootcamp_ws
+cd /home/usr1/TankControllerOrin
 /home/usr1/.local/share/uv/python/cpython-3.14.3-linux-aarch64-gnu/bin/python \
   voice_agent/run_voice_to_qwen.py \
   --text '레이더 작동해서 적 위치 스캔해' \
@@ -144,6 +171,6 @@ cd /home/usr1/bootcamp_ws
 
 ## Repository Notes
 
-- This repository root is `bootcamp_ws`.
+- This repository root is `TankControllerOrin`.
 - Project name is `TankControllerOrin`.
 - Git itself does not store a separate human-readable repository name in local metadata, so the project name is represented through this README and repository structure.

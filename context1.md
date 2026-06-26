@@ -125,8 +125,12 @@ Do not overload `player1_tracks` or `player2_turret` with voice-generated payloa
 
 Instead, add a third logical channel from the Orin board:
 
-- `role`: `voice_command`
-- `device_id`: for example `orin_voice`
+- initial design idea:
+  - `role`: `voice_command`
+  - `device_id`: for example `orin_voice`
+- current implementation choice:
+  - `role`: `player3_voice`
+  - `device_id`: `player3_orin`
 
 Reason:
 
@@ -160,6 +164,16 @@ To stay compatible with the current transport style, the Orin board should emit 
   }
 }
 ```
+
+## Current Implementation Snapshot
+
+- One-shot entrypoint: `voice_agent/run_voice_to_qwen.py`
+- Standby loop entrypoint: `voice_agent/run_voice_pipeline.py`
+- Trigger phrase flow: short wake-window recording -> STT -> trigger match -> command recording -> Qwen parse -> optional TCP send -> return to standby
+- Current fixed command schema:
+  - `reload`
+  - `scanning`
+  - `reject`
 
 ## Voice Command Categories
 

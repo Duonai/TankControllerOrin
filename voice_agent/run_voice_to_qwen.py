@@ -90,6 +90,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = build_arg_parser().parse_args()
+    return run_single_pass(args)
+
+
+def run_single_pass(args: argparse.Namespace) -> int:
     run_started_at = time.perf_counter()
     print(stage_message("RUN", "Pipeline started"), flush=True)
 
@@ -100,38 +104,7 @@ def main() -> int:
         else:
             transcript = transcribe_from_args(args)
 
-        system_prompt = load_prompt(Path(args.prompt_file))
-        command_schema = load_schema(Path(args.schema_file))
-        qwen_started_at = time.perf_counter()
-        print(
-            stage_message("QWEN", f"Sending transcript to {args.qwen_url.rstrip('/')}/v1/chat/completions"),
-            flush=True,
-        )
-
-        client = QwenClient(
-            QwenConfig(
-                base_url=args.qwen_url,
-                model_name=args.qwen_model,
-            )
-        )
-        result = client.normalize_command(transcript, system_prompt, command_schema)
-        qwen_elapsed = time.perf_counter() - qwen_started_at
-
-        print(stage_message("STT", "Transcript ready"), flush=True)
-        print(result["transcript"])
-        print()
-        print(stage_message("QWEN", f"Raw content received (elapsed={format_elapsed(qwen_elapsed)})"), flush=True)
-        print(result["content"])
-        if result["parsed_json"] is not None:
-            print()
-            print(stage_message("QWEN", "Parsed JSON"), flush=True)
-            print(json.dumps(result["parsed_json"], ensure_ascii=False, indent=2))
-        else:
-            print()
-            print(stage_message("QWEN", "Parsed JSON"), flush=True)
-            print("null")
-
-        maybe_send_tank_command(args, result)
+        process_transcript(args, transcript)
 
         total_elapsed = time.perf_counter() - run_started_at
         print()
@@ -144,21 +117,7 @@ def main() -> int:
 
 
 def transcribe_from_args(args: argparse.Namespace) -> str:
-    model_path, best_of, beam_size, no_fallback = resolve_stt_profile(args)
-    stt_prompt = "" if args.disable_stt_prompt else args.stt_prompt
-
-    transcriber = WhisperCppTranscriber(
-        WhisperConfig(
-            whisper_bin=Path(args.whisper_bin),
-            model_path=model_path,
-            language=args.language,
-            threads=max(args.threads, 1),
-            best_of=best_of,
-            beam_size=beam_size,
-            no_fallback=no_fallback,
-            prompt=stt_prompt,
-        )
-    )
+    transcriber, _, _, _, _ = build_transcriber(args)
 
     if args.audio_file:
         audio_path = Path(args.audio_file)
@@ -197,6 +156,31 @@ def transcribe_from_args(args: argparse.Namespace) -> str:
             flush=True,
         )
 
+    return transcribe_audio_path(args, transcriber, audio_path)
+
+
+def build_transcriber(args: argparse.Namespace) -> tuple[WhisperCppTranscriber, Path, int, int, bool]:
+    model_path, best_of, beam_size, no_fallback = resolve_stt_profile(args)
+    stt_prompt = "" if args.disable_stt_prompt else args.stt_prompt
+
+    transcriber = WhisperCppTranscriber(
+        WhisperConfig(
+            whisper_bin=Path(args.whisper_bin),
+            model_path=model_path,
+            language=args.language,
+            threads=max(args.threads, 1),
+            best_of=best_of,
+            beam_size=beam_size,
+            no_fallback=no_fallback,
+            prompt=stt_prompt,
+        )
+    )
+
+    return transcriber, model_path, best_of, beam_size, no_fallback
+
+
+def transcribe_audio_path(args: argparse.Namespace, transcriber: WhisperCppTranscriber, audio_path: Path) -> str:
+    _, model_path, best_of, beam_size, no_fallback = build_transcriber(args)
     stt_started_at = time.perf_counter()
     print(
         stage_message(
@@ -211,6 +195,42 @@ def transcribe_from_args(args: argparse.Namespace) -> str:
     stt_elapsed = time.perf_counter() - stt_started_at
     print(stage_message("STT", f"Transcription finished (elapsed={format_elapsed(stt_elapsed)})"), flush=True)
     return transcript
+
+
+def process_transcript(args: argparse.Namespace, transcript: str) -> dict[str, object]:
+    system_prompt = load_prompt(Path(args.prompt_file))
+    command_schema = load_schema(Path(args.schema_file))
+    qwen_started_at = time.perf_counter()
+    print(
+        stage_message("QWEN", f"Sending transcript to {args.qwen_url.rstrip('/')}/v1/chat/completions"),
+        flush=True,
+    )
+
+    client = QwenClient(
+        QwenConfig(
+            base_url=args.qwen_url,
+            model_name=args.qwen_model,
+        )
+    )
+    result = client.normalize_command(transcript, system_prompt, command_schema)
+    qwen_elapsed = time.perf_counter() - qwen_started_at
+
+    print(stage_message("STT", "Transcript ready"), flush=True)
+    print(result["transcript"])
+    print()
+    print(stage_message("QWEN", f"Raw content received (elapsed={format_elapsed(qwen_elapsed)})"), flush=True)
+    print(result["content"])
+    if result["parsed_json"] is not None:
+        print()
+        print(stage_message("QWEN", "Parsed JSON"), flush=True)
+        print(json.dumps(result["parsed_json"], ensure_ascii=False, indent=2))
+    else:
+        print()
+        print(stage_message("QWEN", "Parsed JSON"), flush=True)
+        print("null")
+
+    maybe_send_tank_command(args, result)
+    return result
 
 
 def resolve_stt_profile(args: argparse.Namespace) -> tuple[Path, int, int, bool]:
