@@ -51,16 +51,26 @@ Example:
 {
   "role": "player3_voice",
   "result": {
-    "command": "reload"
+    "command": "move_forward",
+    "data": 1.0
   }
 }
 ```
 
 Currently allowed command values:
 
+- `move_forward`
+- `move_backward`
+- `pivot_left`
+- `pivot_right`
 - `reload`
 - `scanning`
 - `reject`
+
+All outgoing network packets now use role `player3_voice`.
+When no command is active, the loop continuously sends `{"command":"none","data":0.0}` at about 10 fps.
+Timed movement commands are repeated on that same stream for their active duration.
+One-shot commands such as `reload` and `scanning` are injected once into that stream.
 
 ## Prerequisites
 
@@ -98,7 +108,7 @@ Text-only test:
 cd /home/usr1/TankControllerOrin
 /home/usr1/.local/share/uv/python/cpython-3.14.3-linux-aarch64-gnu/bin/python \
   voice_agent/run_voice_to_qwen.py \
-  --text '재장전해'
+  --text '1초간 전진해'
 ```
 
 Microphone test with auto-stop:
@@ -126,6 +136,7 @@ cd /home/usr1/TankControllerOrin
   --trigger-key space \
   --quit-key q \
   --send-command \
+  --stream-hz 10 \
   --tank-profile local
 ```
 
@@ -133,9 +144,13 @@ Behavior of the standby loop:
 
 - Reuse an already-running Qwen server if `/health` is available.
 - Otherwise start `llama-server` locally when `--start-qwen` is enabled.
+- Start a persistent `player3_voice` TCP stream immediately when `--send-command` is enabled.
+- Continuously send idle packets with `command=none` and `data=0.0` at the configured stream rate.
 - Wait for an immediate keyboard trigger instead of running STT for wake-word detection.
 - When the trigger key is pressed, print a clear log message and terminal bell, then start command capture.
-- Wait until Qwen parsing and optional command send finish, then return to standby mode.
+- When Qwen emits a timed movement command such as `move_forward`, keep sending that command on the persistent stream for the derived duration.
+- When Qwen emits a one-shot command such as `reload` or `scanning`, send it once on the persistent stream and then return to idle packets.
+- Wait until Qwen parsing and command queueing finish, then return to standby mode.
 - If TankController sending fails, log the send error and return to standby mode without terminating the loop.
 - Press the quit key to leave standby mode cleanly.
 
@@ -164,7 +179,7 @@ Then in another terminal:
 cd /home/usr1/TankControllerOrin
 /home/usr1/.local/share/uv/python/cpython-3.14.3-linux-aarch64-gnu/bin/python \
   voice_agent/run_voice_to_qwen.py \
-  --text '레이더 작동해서 적 위치 스캔해' \
+  --text '왼쪽으로 90도 회전해' \
   --send-command \
   --tank-profile local
 ```

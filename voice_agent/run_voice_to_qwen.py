@@ -73,6 +73,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="JSON schema file used to validate the Qwen command output",
     )
     parser.add_argument("--send-command", action="store_true", help="Send non-reject Qwen output to the TankController TCP server")
+    parser.add_argument("--stream-hz", type=float, default=10.0, help="Send rate used for persistent player3 command streaming and timed command expansion")
     parser.add_argument(
         "--tank-config",
         default=str(workspace_dir / "TankControllerRasberryPi" / "config" / "runtime_config.json"),
@@ -279,20 +280,58 @@ def maybe_send_tank_command(args: argparse.Namespace, result: dict[str, object])
         print(stage_message("SEND", "Skipped TankController send because command=reject"), flush=True)
         return
 
+    role_name = parsed_json.get("role")
+    target_node = str(role_name) if isinstance(role_name, str) and role_name else args.tank_node
+
+    stream_sender = getattr(args, "command_stream_sender", None)
+    if stream_sender is not None:
+        send_started_at = time.perf_counter()
+        print(
+            stage_message(
+                "SEND",
+                f"Queueing command on persistent stream node={target_node} profile={args.tank_profile or 'config-default'}",
+            ),
+            flush=True,
+        )
+        send_info = stream_sender.submit_command(parsed_json)
+        send_elapsed = time.perf_counter() - send_started_at
+        print(
+            stage_message(
+                "SEND",
+                f"Queued command={send_info['command']} node={send_info['node']} device_id={send_info['device_id']} "
+                f"estimated_packets={send_info['packets_estimate']} duration={send_info['duration_sec']:.2f}s "
+                f"(elapsed={format_elapsed(send_elapsed)})",
+            ),
+            flush=True,
+        )
+        return
+
     send_started_at = time.perf_counter()
     print(
         stage_message(
             "SEND",
-            f"Sending command to TankController using node={args.tank_node} profile={args.tank_profile or 'config-default'}",
+            f"Sending command to TankController using node={target_node} profile={args.tank_profile or 'config-default'}",
         ),
         flush=True,
     )
-    send_info = send_tank_command(parsed_json, Path(args.tank_config), args.tank_node, args.tank_profile)
+    send_info = send_tank_command(parsed_json, Path(args.tank_config), target_node, args.tank_profile, stream_hz=args.stream_hz)
     send_elapsed = time.perf_counter() - send_started_at
+    if "packets_sent" in send_info:
+        print(
+            stage_message(
+                "SEND",
+                f"Motion command sent to {send_info['host']}:{send_info['port']} node={send_info.get('node', target_node)} "
+                f"device_id={send_info['device_id']} packets={send_info['packets_sent']} duration={send_info['duration_sec']:.2f}s "
+                f"(elapsed={format_elapsed(send_elapsed)})",
+            ),
+            flush=True,
+        )
+        return
+
     print(
         stage_message(
             "SEND",
-            f"Command sent to {send_info['host']}:{send_info['port']} device_id={send_info['device_id']} "
+            f"Command sent to {send_info['host']}:{send_info['port']} node={send_info.get('node', target_node)} device_id={send_info['device_id']} "
             f"(elapsed={format_elapsed(send_elapsed)})",
         ),
         flush=True,

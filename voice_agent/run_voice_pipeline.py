@@ -18,7 +18,7 @@ from run_voice_to_qwen import (
     transcribe_audio_path,
 )
 from src.stt_engine import SttError
-from src.tank_command_sender import TankCommandSendError
+from src.tank_command_sender import TankCommandSendError, VoiceCommandStreamSender
 from src.qwen_client import QwenError
 
 
@@ -69,6 +69,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = build_arg_parser().parse_args()
     server_process: subprocess.Popen[str] | None = None
+    command_stream_sender: VoiceCommandStreamSender | None = None
 
     try:
         trigger_key = resolve_key_spec(args.trigger_key)
@@ -77,6 +78,22 @@ def main() -> int:
             raise ValueError("trigger key and quit key must be different")
 
         server_process = ensure_qwen_server(args)
+        if args.send_command:
+            command_stream_sender = VoiceCommandStreamSender(
+                config_path=Path(args.tank_config),
+                node_name=args.tank_node,
+                profile_override=args.tank_profile,
+                stream_hz=args.stream_hz,
+            )
+            command_stream_sender.start()
+            args.command_stream_sender = command_stream_sender
+            print(
+                stage_message(
+                    "SEND",
+                    f"Persistent command stream started node={args.tank_node} profile={args.tank_profile or 'config-default'} hz={args.stream_hz:g}",
+                ),
+                flush=True,
+            )
         print(
             stage_message(
                 "WAIT",
@@ -111,6 +128,8 @@ def main() -> int:
         print(stage_message("ERROR", str(exc)), flush=True)
         return 1
     finally:
+        if command_stream_sender is not None:
+            command_stream_sender.close()
         stop_qwen_server(server_process)
 
 
