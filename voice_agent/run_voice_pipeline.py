@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
+import select
+import struct
 import subprocess
 import termios
 import time
@@ -24,6 +27,53 @@ from src.qwen_client import QwenError
 
 DEFAULT_TRIGGER_KEY = "space"
 DEFAULT_QUIT_KEY = "q"
+DEFAULT_TRIGGER_INPUT_MODE = "auto"
+DEFAULT_TRIGGER_EVENT_DEVICE = "auto"
+
+INPUT_EVENT_STRUCT = struct.Struct("llHHI")
+INPUT_EVENT_TYPE_KEY = 0x01
+INPUT_EVENT_KEY_DOWN = 0x01
+
+KEY_NAME_TO_EVENT_CODE = {
+    "space": 57,
+    "enter": 28,
+    "a": 30,
+    "b": 48,
+    "c": 46,
+    "d": 32,
+    "e": 18,
+    "f": 33,
+    "g": 34,
+    "h": 35,
+    "i": 23,
+    "j": 36,
+    "k": 37,
+    "l": 38,
+    "m": 50,
+    "n": 49,
+    "o": 24,
+    "p": 25,
+    "q": 16,
+    "r": 19,
+    "s": 31,
+    "t": 20,
+    "u": 22,
+    "v": 47,
+    "w": 17,
+    "x": 45,
+    "y": 21,
+    "z": 44,
+    "0": 11,
+    "1": 2,
+    "2": 3,
+    "3": 4,
+    "4": 5,
+    "5": 6,
+    "6": 7,
+    "7": 8,
+    "8": 9,
+    "9": 10,
+}
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -41,6 +91,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--quit-key",
         default=DEFAULT_QUIT_KEY,
         help="Keyboard key that exits standby mode: 'space', 'enter', or a single character",
+    )
+    parser.add_argument(
+        "--trigger-input-mode",
+        choices=["auto", "tty", "event"],
+        default=DEFAULT_TRIGGER_INPUT_MODE,
+        help="Trigger input source: auto prefers a physical keyboard event device, tty uses the current terminal, event forces a Linux input event device",
+    )
+    parser.add_argument(
+        "--trigger-event-device",
+        default=DEFAULT_TRIGGER_EVENT_DEVICE,
+        help="Linux input event device path for trigger keys, 'auto' to detect readable keyboard devices, or a comma-separated list of event paths",
     )
     parser.add_argument("--listen-once", action="store_true", help="Exit after one successful trigger and command cycle")
     parser.add_argument("--start-qwen", action="store_true", help="Start the local Qwen server automatically if it is not already available")
@@ -77,6 +138,10 @@ def main() -> int:
         if trigger_key == quit_key:
             raise ValueError("trigger key and quit key must be different")
 
+        trigger_key_code = resolve_event_key_code(args.trigger_key)
+        quit_key_code = resolve_event_key_code(args.quit_key)
+        trigger_input_mode, trigger_event_devices = resolve_trigger_input_source(args)
+
         server_process = ensure_qwen_server(args)
         if args.send_command:
             command_stream_sender = VoiceCommandStreamSender(
@@ -97,12 +162,19 @@ def main() -> int:
         print(
             stage_message(
                 "WAIT",
-                f"Standby mode entered; press {describe_key(trigger_key)} to record or {describe_key(quit_key)} to quit",
+                describe_wait_message(trigger_key, quit_key, trigger_input_mode, trigger_event_devices),
             ),
             flush=True,
         )
         while True:
-            pressed_key = wait_for_trigger_key(trigger_key, quit_key)
+            pressed_key = wait_for_trigger_key(
+                trigger_key=trigger_key,
+                quit_key=quit_key,
+                trigger_key_code=trigger_key_code,
+                quit_key_code=quit_key_code,
+                input_mode=trigger_input_mode,
+                event_devices=trigger_event_devices,
+            )
             if pressed_key == quit_key:
                 print(stage_message("RUN", "Quit key pressed; shutting down"), flush=True)
                 return 0
@@ -229,7 +301,19 @@ def is_qwen_healthy(base_url: str) -> bool:
         return False
 
 
-def wait_for_trigger_key(trigger_key: str, quit_key: str) -> str:
+def wait_for_trigger_key(
+    trigger_key: str,
+    quit_key: str,
+    trigger_key_code: int,
+    quit_key_code: int,
+    input_mode: str,
+    event_devices: list[Path],
+) -> str:
+    if input_mode == "event":
+        if not event_devices:
+            raise RuntimeError("trigger input mode is 'event' but no keyboard event device is available")
+        return wait_for_event_key(trigger_key, quit_key, trigger_key_code, quit_key_code, event_devices)
+
     tty_path = "/dev/tty"
     try:
         with open(tty_path, "rb", buffering=0) as tty_stream:
@@ -247,6 +331,41 @@ def wait_for_trigger_key(trigger_key: str, quit_key: str) -> str:
                 termios.tcsetattr(file_descriptor, termios.TCSADRAIN, original_attrs)
     except OSError as exc:
         raise RuntimeError(f"failed to read keyboard trigger from {tty_path}: {exc}") from exc
+
+
+def wait_for_event_key(trigger_key: str, quit_key: str, trigger_key_code: int, quit_key_code: int, event_devices: list[Path]) -> str:
+    streams: list[tuple[Path, object]] = []
+    try:
+        for event_device in event_devices:
+            streams.append((event_device, event_device.open("rb", buffering=0)))
+
+        while True:
+            ready_streams, _, _ = select.select([stream for _, stream in streams], [], [])
+            for ready_stream in ready_streams:
+                event_stream = next(stream for _, stream in streams if stream == ready_stream)
+                while True:
+                    event_bytes = event_stream.read(INPUT_EVENT_STRUCT.size)
+                    if len(event_bytes) != INPUT_EVENT_STRUCT.size:
+                        break
+
+                    _tv_sec, _tv_usec, event_type, event_code, event_value = INPUT_EVENT_STRUCT.unpack(event_bytes)
+                    if event_type != INPUT_EVENT_TYPE_KEY or event_value != INPUT_EVENT_KEY_DOWN:
+                        continue
+                    if event_code == trigger_key_code:
+                        return trigger_key
+                    if event_code == quit_key_code:
+                        return quit_key
+    except PermissionError as exc:
+        event_list = ", ".join(str(path) for path in event_devices)
+        raise RuntimeError(
+            f"cannot read keyboard event device {event_list}: permission denied; add user '{os.environ.get('USER', 'current user')}' to the 'input' group or run from a session with access"
+        ) from exc
+    except OSError as exc:
+        event_list = ", ".join(str(path) for path in event_devices)
+        raise RuntimeError(f"failed to read keyboard event device {event_list}: {exc}") from exc
+    finally:
+        for _event_device, event_stream in streams:
+            event_stream.close()
 
 
 def run_command_cycle(args: argparse.Namespace) -> bool:
@@ -310,12 +429,118 @@ def resolve_key_spec(key_spec: str) -> str:
     raise ValueError("key spec must be 'space', 'enter', or a single character")
 
 
+def resolve_event_key_code(key_spec: str) -> int:
+    normalized = key_spec.strip().lower()
+    event_code = KEY_NAME_TO_EVENT_CODE.get(normalized)
+    if event_code is None:
+        raise ValueError("event key spec must be 'space', 'enter', a-z, or 0-9")
+    return event_code
+
+
 def describe_key(key_value: str) -> str:
     if key_value == " ":
         return "SPACE"
     if key_value in {"\r", "\n"}:
         return "ENTER"
     return key_value.upper()
+
+
+def resolve_trigger_input_source(args: argparse.Namespace) -> tuple[str, list[Path]]:
+    if args.trigger_input_mode == "tty":
+        return "tty", []
+
+    event_devices = resolve_trigger_event_devices(args.trigger_event_device)
+    if args.trigger_input_mode == "event":
+        if not event_devices:
+            raise RuntimeError("no keyboard event device was found; specify --trigger-event-device or use --trigger-input-mode tty")
+        return "event", event_devices
+
+    readable_event_devices = [event_device for event_device in event_devices if os.access(event_device, os.R_OK)]
+    if readable_event_devices:
+        return "event", readable_event_devices
+    return "tty", event_devices
+
+
+def resolve_trigger_event_devices(device_arg: str) -> list[Path]:
+    if device_arg and device_arg != "auto":
+        device_paths: list[Path] = []
+        for item in device_arg.split(","):
+            device_path = Path(item.strip())
+            if not device_path.exists():
+                raise RuntimeError(f"trigger event device not found: {device_path}")
+            device_paths.append(device_path)
+        return device_paths
+
+    return detect_keyboard_event_devices()
+
+
+def detect_keyboard_event_devices() -> list[Path]:
+    by_id_dir = Path("/dev/input/by-id")
+    if by_id_dir.exists():
+        by_id_devices: list[Path] = []
+        for entry in sorted(by_id_dir.iterdir()):
+            if not entry.name.endswith("-event-kbd"):
+                continue
+            target_path = entry.resolve()
+            if target_path.exists() and target_path not in by_id_devices:
+                by_id_devices.append(target_path)
+        if by_id_devices:
+            return by_id_devices
+
+    devices_path = Path("/proc/bus/input/devices")
+    if not devices_path.exists():
+        return []
+
+    blocks = devices_path.read_text(encoding="utf-8", errors="replace").split("\n\n")
+    preferred_events: list[Path] = []
+    fallback_events: list[Path] = []
+
+    for block in blocks:
+        lines = [line.strip() for line in block.splitlines() if line.strip()]
+        if not lines:
+            continue
+
+        name = ""
+        handlers = ""
+        for line in lines:
+            if line.startswith("N: Name="):
+                name = line.split("=", 1)[1].strip().strip('"')
+            elif line.startswith("H: Handlers="):
+                handlers = line.split("=", 1)[1].strip()
+
+        if "kbd" not in handlers:
+            continue
+
+        name_lower = name.lower()
+        if any(excluded in name_lower for excluded in ("microphone", "mouse", "headset jack", "hdmi/dp")):
+            continue
+
+        match = re.search(r"\bevent(\d+)\b", handlers)
+        if not match:
+            continue
+
+        event_path = Path("/dev/input") / f"event{match.group(1)}"
+        if not event_path.exists():
+            continue
+
+        if "keyboard" in name_lower or "leds" in handlers:
+            if event_path not in preferred_events:
+                preferred_events.append(event_path)
+        elif event_path not in fallback_events:
+            fallback_events.append(event_path)
+
+    return preferred_events + [event_path for event_path in fallback_events if event_path not in preferred_events]
+
+
+def describe_wait_message(trigger_key: str, quit_key: str, input_mode: str, event_devices: list[Path]) -> str:
+    base = f"Standby mode entered; press {describe_key(trigger_key)} to record or {describe_key(quit_key)} to quit"
+    if input_mode == "event" and event_devices:
+        return f"{base} using keyboard event device(s) {', '.join(str(path) for path in event_devices)}"
+    if input_mode == "tty" and event_devices:
+        unreadable = [path for path in event_devices if not os.access(path, os.R_OK)]
+        if unreadable:
+            return f"{base} using terminal input because {', '.join(str(path) for path in unreadable)} is not readable by the current user"
+    return f"{base} using terminal input"
 
 
 def resolve_host_port(base_url: str) -> tuple[str, int]:

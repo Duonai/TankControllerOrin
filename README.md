@@ -147,12 +147,21 @@ Behavior of the standby loop:
 - Start a persistent `player3_voice` TCP stream immediately when `--send-command` is enabled.
 - Continuously send idle packets with `command=none` and `data=0.0` at the configured stream rate.
 - Wait for an immediate keyboard trigger instead of running STT for wake-word detection.
+- In `auto` mode the program prefers a physical Linux keyboard event device and falls back to terminal input only if no readable keyboard event device is available.
+- Some mini keyboards expose multiple event nodes. `auto` mode now listens to all readable keyboard event devices it finds.
+- You can force a specific attached keyboard with `--trigger-input-mode event --trigger-event-device /dev/input/event7` or give multiple devices like `/dev/input/event7,/dev/input/event8`.
 - When the trigger key is pressed, print a clear log message and terminal bell, then start command capture.
 - When Qwen emits a timed movement command such as `move_forward`, keep sending that command on the persistent stream for the derived duration.
 - When Qwen emits a one-shot command such as `reload` or `scanning`, send it once on the persistent stream and then return to idle packets.
 - Wait until Qwen parsing and command queueing finish, then return to standby mode.
 - If TankController sending fails, log the send error and return to standby mode without terminating the loop.
 - Press the quit key to leave standby mode cleanly.
+
+If the physical keyboard event device is not readable by the current user, add the user to the `input` group and re-login:
+
+```bash
+sudo usermod -aG input usr1
+```
 
 ## Sending Commands to TankController
 
