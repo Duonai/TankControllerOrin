@@ -79,7 +79,7 @@ Expected local assets and tools:
 - Jetson Orin environment
 - local Qwen GGUF model
 - built `llama.cpp`
-- built `whisper.cpp`
+- built `whisper.cpp` CPU or CUDA binaries
 - `ffmpeg`
 - `arecord`
 - Python executable used in this workspace:
@@ -100,6 +100,38 @@ cd /home/usr1/TankControllerOrin/llama.cpp
   --port 8080
 ```
 
+## Running whisper.cpp with CUDA as Default
+
+The STT entrypoints now prefer the following `whisper.cpp` binaries in this order:
+
+1. `whisper.cpp/build-cuda-orin/bin/whisper-cli`
+2. `whisper.cpp/build-cuda/bin/whisper-cli`
+3. `whisper.cpp/build/bin/whisper-cli`
+
+That means no extra STT flag is needed once the Orin CUDA build exists.
+
+Build the Orin-specific CUDA version:
+
+```bash
+cd /home/usr1/TankControllerOrin/whisper.cpp
+export PATH="/usr/local/cuda/bin:$PATH"
+cmake -S . -B build-cuda-orin \
+  -DGGML_CUDA=ON \
+  -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc \
+  -DCMAKE_CUDA_ARCHITECTURES=87 \
+  -DWHISPER_BUILD_SERVER=ON \
+  -DWHISPER_BUILD_TESTS=OFF \
+  -DWHISPER_BUILD_EXAMPLES=ON
+cmake --build build-cuda-orin -j12
+```
+
+Validated local measurements on `voice_agent/audio/last_command.wav`:
+
+- CPU CLI: about `2.15s`
+- CUDA CLI: about `1.15s`
+- CUDA resident server first request: about `0.53s`
+- CUDA resident server warm request: about `0.23s`
+
 ## Running Voice Command Parsing
 
 Text-only test:
@@ -111,6 +143,8 @@ cd /home/usr1/TankControllerOrin
   --text '1초간 전진해'
 ```
 
+This now uses the CUDA STT build by default if `whisper.cpp/build-cuda-orin/bin/whisper-cli` exists.
+
 Microphone test with auto-stop:
 
 ```bash
@@ -121,6 +155,19 @@ cd /home/usr1/TankControllerOrin
   --auto-stop \
   --silence-stop-seconds 0.6 \
   --language ko
+```
+
+To force CPU STT for comparison:
+
+```bash
+cd /home/usr1/TankControllerOrin
+/home/usr1/.local/share/uv/python/cpython-3.14.3-linux-aarch64-gnu/bin/python \
+  voice_agent/run_voice_to_qwen.py \
+  --record-seconds 5 \
+  --auto-stop \
+  --silence-stop-seconds 0.6 \
+  --language ko \
+  --whisper-bin /home/usr1/TankControllerOrin/whisper.cpp/build/bin/whisper-cli
 ```
 
 Standby loop with keyboard-triggered recording and automatic Qwen startup:

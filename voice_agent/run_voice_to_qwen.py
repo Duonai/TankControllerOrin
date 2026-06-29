@@ -14,6 +14,20 @@ from src.tank_command_sender import TankCommandSendError, send_tank_command
 DEFAULT_STT_PROMPT = "마이크작동. 음성 명령. 전진. 후진. 정지. 좌회전. 우회전. 포탑. 발사. 안전 모드."
 
 
+def resolve_default_whisper_bin(workspace_dir: Path) -> Path:
+    candidates = [
+        workspace_dir / "whisper.cpp" / "build-cuda-orin" / "bin" / "whisper-cli",
+        workspace_dir / "whisper.cpp" / "build-cuda" / "bin" / "whisper-cli",
+        workspace_dir / "whisper.cpp" / "build" / "bin" / "whisper-cli",
+    ]
+
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+
+    return candidates[-1]
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     root_dir = Path(__file__).resolve().parent
     workspace_dir = root_dir.parent
@@ -39,8 +53,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--whisper-bin",
-        default=str(workspace_dir / "whisper.cpp" / "build" / "bin" / "whisper-cli"),
-        help="Path to whisper.cpp CLI binary",
+        default=str(resolve_default_whisper_bin(workspace_dir)),
+        help="Path to whisper.cpp CLI binary; defaults to a CUDA build when available",
     )
     parser.add_argument(
         "--whisper-model",

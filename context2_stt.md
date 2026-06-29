@@ -1,5 +1,48 @@
 # STT Implementation Status and Qwen Tuning Plan
 
+## 2026-06-29 CUDA Default Update
+
+This section is the current authoritative status for the active `TankControllerOrin` repository. Older notes later in this file include historical prototype details.
+
+Current repository root for the active implementation:
+
+- `/home/usr1/TankControllerOrin`
+
+Current default STT binary selection order in `voice_agent/run_voice_to_qwen.py`:
+
+1. `/home/usr1/TankControllerOrin/whisper.cpp/build-cuda-orin/bin/whisper-cli`
+2. `/home/usr1/TankControllerOrin/whisper.cpp/build-cuda/bin/whisper-cli`
+3. `/home/usr1/TankControllerOrin/whisper.cpp/build/bin/whisper-cli`
+
+This matters because `WhisperCppTranscriber` derives `whisper-server` from the selected `whisper-cli` sibling path, so the default STT path now uses the CUDA server automatically when the Orin CUDA build exists.
+
+Validated CUDA build command:
+
+```bash
+cd /home/usr1/TankControllerOrin/whisper.cpp
+export PATH="/usr/local/cuda/bin:$PATH"
+cmake -S . -B build-cuda-orin \
+  -DGGML_CUDA=ON \
+  -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc \
+  -DCMAKE_CUDA_ARCHITECTURES=87 \
+  -DWHISPER_BUILD_SERVER=ON \
+  -DWHISPER_BUILD_TESTS=OFF \
+  -DWHISPER_BUILD_EXAMPLES=ON
+cmake --build build-cuda-orin -j12
+```
+
+Validated measurements on `/home/usr1/TankControllerOrin/voice_agent/audio/last_command.wav`:
+
+- CPU CLI: about `2.15s`
+- CUDA CLI: about `1.15s`
+- CUDA resident server first request: about `0.532s`
+- CUDA resident server warm request: about `0.225s`
+- Default STT path after the code change: about `0.97s`
+
+Validated transcript for CPU and CUDA runs:
+
+- `뒤로 1초간 후진.`
+
 ## Scope Status
 
 The STT-to-Qwen prototype for the Orin board is complete enough to treat as the current baseline.
