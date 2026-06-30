@@ -7,6 +7,7 @@ import select
 import struct
 import subprocess
 import termios
+import threading
 import time
 import tty
 from pathlib import Path
@@ -32,6 +33,7 @@ DEFAULT_TRIGGER_EVENT_DEVICE = "auto"
 
 INPUT_EVENT_STRUCT = struct.Struct("llHHI")
 INPUT_EVENT_TYPE_KEY = 0x01
+INPUT_EVENT_KEY_UP = 0x00
 INPUT_EVENT_KEY_DOWN = 0x01
 
 KEY_NAME_TO_EVENT_CODE = {
@@ -141,6 +143,10 @@ def main() -> int:
         trigger_key_code = resolve_event_key_code(args.trigger_key)
         quit_key_code = resolve_event_key_code(args.quit_key)
         trigger_input_mode, trigger_event_devices = resolve_trigger_input_source(args)
+        if trigger_input_mode != "event":
+            raise RuntimeError(
+                "hold-to-record requires a readable physical keyboard event device; use auto mode with input access or --trigger-input-mode event"
+            )
 
         server_process = ensure_qwen_server(args)
         if args.send_command:
@@ -181,9 +187,9 @@ def main() -> int:
 
             print("\a", end="", flush=True)
             print(stage_message("TRIGGER", f"Trigger key pressed: {describe_key(pressed_key)}"), flush=True)
-            print(stage_message("SIGNAL", "Command recording started"), flush=True)
+            print(stage_message("SIGNAL", f"Command recording started; hold {describe_key(trigger_key)} and release to stop"), flush=True)
 
-            cycle_completed = run_command_cycle(args)
+            cycle_completed = run_command_cycle(args, trigger_event_devices, trigger_key_code)
             if cycle_completed:
                 print(stage_message("WAIT", "Returning to standby mode"), flush=True)
             else:
@@ -368,8 +374,8 @@ def wait_for_event_key(trigger_key: str, quit_key: str, trigger_key_code: int, q
             event_stream.close()
 
 
-def run_command_cycle(args: argparse.Namespace) -> bool:
-    command_audio_path = record_command_audio(args)
+def run_command_cycle(args: argparse.Namespace, event_devices: list[Path], trigger_key_code: int) -> bool:
+    command_audio_path = record_command_audio(args, event_devices, trigger_key_code)
     transcriber, _, _, _, _ = build_transcriber(args)
     transcript = transcribe_audio_path(args, transcriber, command_audio_path)
 
@@ -382,38 +388,68 @@ def run_command_cycle(args: argparse.Namespace) -> bool:
     return True
 
 
-def record_command_audio(args: argparse.Namespace) -> Path:
+def record_command_audio(args: argparse.Namespace, event_devices: list[Path], trigger_key_code: int) -> Path:
     transcriber, _, _, _, _ = build_transcriber(args)
     command_audio_path = Path(args.record_output)
     record_started_at = time.perf_counter()
+    stop_event = threading.Event()
+    release_watcher = threading.Thread(
+        target=wait_for_event_key_release,
+        args=(trigger_key_code, event_devices, stop_event),
+        name="voice-trigger-release",
+        daemon=True,
+    )
+    release_watcher.start()
 
-    if args.auto_stop:
-        print(
-            stage_message(
-                "RECORD",
-                f"Command auto-stop recording started max={args.record_seconds:g}s device='{args.record_device}' silence_stop={args.silence_stop_seconds:g}s",
-            ),
-            flush=True,
-        )
-        transcriber.record_audio_auto_stop(
+    safety_limit = args.record_seconds if args.record_seconds > 0 else None
+    limit_text = f" max={args.record_seconds:g}s" if safety_limit is not None else ""
+    print(
+        stage_message(
+            "RECORD",
+            f"Command recording started device='{args.record_device}'{limit_text}; release trigger key to stop",
+        ),
+        flush=True,
+    )
+    try:
+        transcriber.record_audio_until_stop(
             command_audio_path,
-            max_seconds=args.record_seconds,
+            stop_event=stop_event,
             device=args.record_device,
-            silence_stop_seconds=args.silence_stop_seconds,
-            speech_start_threshold=args.speech_start_threshold,
-            speech_end_threshold=args.speech_end_threshold,
-            min_speech_seconds=args.min_speech_seconds,
+            max_seconds=safety_limit,
         )
-    else:
-        print(
-            stage_message("RECORD", f"Command recording for {args.record_seconds:g}s from ALSA device '{args.record_device}' ..."),
-            flush=True,
-        )
-        transcriber.record_audio(command_audio_path, args.record_seconds, args.record_device)
+    finally:
+        stop_event.set()
+        release_watcher.join(timeout=1.0)
 
     elapsed = time.perf_counter() - record_started_at
     print(stage_message("RECORD", f"Command audio saved to {command_audio_path} (elapsed={format_elapsed(elapsed)})"), flush=True)
     return command_audio_path
+
+
+def wait_for_event_key_release(trigger_key_code: int, event_devices: list[Path], stop_event: threading.Event) -> None:
+    streams: list[tuple[Path, object]] = []
+    try:
+        for event_device in event_devices:
+            streams.append((event_device, event_device.open("rb", buffering=0)))
+
+        while not stop_event.is_set():
+            ready_streams, _, _ = select.select([stream for _, stream in streams], [], [], 0.1)
+            for ready_stream in ready_streams:
+                event_stream = next(stream for _, stream in streams if stream == ready_stream)
+                while not stop_event.is_set():
+                    event_bytes = event_stream.read(INPUT_EVENT_STRUCT.size)
+                    if len(event_bytes) != INPUT_EVENT_STRUCT.size:
+                        break
+
+                    _tv_sec, _tv_usec, event_type, event_code, event_value = INPUT_EVENT_STRUCT.unpack(event_bytes)
+                    if event_type != INPUT_EVENT_TYPE_KEY:
+                        continue
+                    if event_code == trigger_key_code and event_value == INPUT_EVENT_KEY_UP:
+                        stop_event.set()
+                        return
+    finally:
+        for _event_device, event_stream in streams:
+            event_stream.close()
 
 
 def resolve_key_spec(key_spec: str) -> str:

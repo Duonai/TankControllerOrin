@@ -8,6 +8,7 @@ import shutil
 import socket
 import subprocess
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -363,6 +364,88 @@ class WhisperCppTranscriber:
 
         if not output_path.exists() or output_path.stat().st_size == 0:
             raise SttError("auto-stop recording produced no audio")
+
+        return output_path
+
+    def record_audio_until_stop(
+        self,
+        output_path: Path,
+        stop_event: threading.Event,
+        device: str = "default",
+        max_seconds: float | None = None,
+    ) -> Path:
+        if shutil.which("arecord") is None:
+            raise SttError("arecord not found in PATH")
+
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        command = [
+            "arecord",
+            "-D",
+            device,
+            "-f",
+            "S16_LE",
+            "-r",
+            "16000",
+            "-c",
+            "1",
+            "-t",
+            "raw",
+        ]
+
+        sample_rate = 16000
+        chunk_duration_seconds = 0.1
+        chunk_samples = int(sample_rate * chunk_duration_seconds)
+        chunk_bytes = chunk_samples * 2
+        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+        total_seconds = 0.0
+        try:
+            with wave.open(str(output_path), "wb") as wav_file:
+                wav_file.setnchannels(1)
+                wav_file.setsampwidth(2)
+                wav_file.setframerate(sample_rate)
+
+                while not stop_event.is_set():
+                    if max_seconds is not None and total_seconds >= max_seconds:
+                        break
+
+                    if process.stdout is None:
+                        raise SttError("audio capture stream is unavailable")
+
+                    chunk = process.stdout.read(chunk_bytes)
+                    if not chunk:
+                        break
+
+                    wav_file.writeframes(chunk)
+                    total_seconds += len(chunk) / 2 / sample_rate
+        finally:
+            stop_event.set()
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=1.0)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=1.0)
+
+        stderr_output = ""
+        if process.stderr is not None:
+            stderr_output = process.stderr.read().decode("utf-8", errors="replace").strip()
+
+        if process.returncode is None:
+            process.wait(timeout=1.0)
+
+        terminated_by_us = "Aborted by signal Terminated" in stderr_output
+        has_audio_output = output_path.exists() and output_path.stat().st_size > 44
+
+        if terminated_by_us and has_audio_output:
+            stderr_output = ""
+
+        if process.returncode not in (0, -15, 143) and not (terminated_by_us and has_audio_output):
+            raise SttError(stderr_output or f"audio recording failed with exit code {process.returncode}")
+
+        if not output_path.exists() or output_path.stat().st_size <= 44:
+            raise SttError("recording produced no audio")
 
         return output_path
 
