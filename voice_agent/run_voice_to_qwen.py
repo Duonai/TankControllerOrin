@@ -309,6 +309,16 @@ def maybe_send_tank_command(args: argparse.Namespace, result: dict[str, object])
         )
         send_info = stream_sender.submit_command(parsed_json)
         send_elapsed = time.perf_counter() - send_started_at
+        if send_info.get("skipped"):
+            print(
+                stage_message(
+                    "SEND",
+                    f"Skipped command={send_info['command']} because cooldown remains {send_info['cooldown_remaining']:.2f}s "
+                    f"node={send_info['node']} device_id={send_info['device_id']} (elapsed={format_elapsed(send_elapsed)})",
+                ),
+                flush=True,
+            )
+            return
         print(
             stage_message(
                 "SEND",
@@ -330,6 +340,16 @@ def maybe_send_tank_command(args: argparse.Namespace, result: dict[str, object])
     )
     send_info = send_tank_command(parsed_json, Path(args.tank_config), target_node, args.tank_profile, stream_hz=args.stream_hz)
     send_elapsed = time.perf_counter() - send_started_at
+    if send_info.get("skipped"):
+        print(
+            stage_message(
+                "SEND",
+                f"Skipped command={send_info['command']} because cooldown remains {send_info['cooldown_remaining']:.2f}s "
+                f"node={send_info['node']} device_id={send_info['device_id']} (elapsed={format_elapsed(send_elapsed)})",
+            ),
+            flush=True,
+        )
+        return
     if "packets_sent" in send_info:
         print(
             stage_message(

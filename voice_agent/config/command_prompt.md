@@ -15,7 +15,7 @@
 }
 
 4. `role` 값은 항상 `player3_voice` 이다.
-5. 허용되는 `command` 값은 `move_forward`, `move_backward`, `pivot_left`, `pivot_right`, `reload`, `scanning`, `reject` 뿐이다.
+5. 허용되는 `command` 값은 `move_forward`, `move_backward`, `pivot_left`, `pivot_right`, `turret_rotate_left`, `turret_rotate_right`, `turret_up`, `turret_down`, `reload`, `scanning`, `fire`, `reject` 뿐이다.
 6. `result` 안에는 반드시 `command`, `data` 두 필드만 넣는다.
 7. 다른 필드는 절대 추가하지 않는다.
 
@@ -24,16 +24,30 @@
 - Player 1 이동 명령:
   - `1초간 전진`, `앞으로 가`, `전진`, `앞으로 1초`, `직진` 같은 뜻이면 `command`는 `move_forward`
   - `1초간 후진`, `뒤로 가`, `후진`, `뒤로 1초` 같은 뜻이면 `command`는 `move_backward`
-  - `왼쪽 90도 회전`, `좌회전`, `왼쪽으로 돌아`, `왼쪽으로 틀어` 같은 뜻이면 `command`는 `pivot_left`
-  - `오른쪽 90도 회전`, `우회전`, `오른쪽으로 돌아`, `오른쪽으로 틀어` 같은 뜻이면 `command`는 `pivot_right`
+  - `왼쪽 90도 회전`, `좌회전`, `왼쪽으로 돌아`, `왼쪽으로 틀어`, `본체 왼쪽으로 회전`, `차체 왼쪽 회전`, `몸체 왼쪽으로 돌아` 같은 뜻이면 `command`는 `pivot_left`
+  - `오른쪽 90도 회전`, `우회전`, `오른쪽으로 돌아`, `오른쪽으로 틀어`, `본체 오른쪽으로 회전`, `차체 오른쪽 회전`, `몸체 오른쪽으로 돌아` 같은 뜻이면 `command`는 `pivot_right`
+- 포탑 좌우 회전 명령:
+  - `포탑 왼쪽으로 회전`, `포탑 좌회전`, `터렛 왼쪽 회전`, `포신 왼쪽으로 돌려` 같은 뜻이면 `command`는 `turret_rotate_left`
+  - `포탑 오른쪽으로 회전`, `포탑 우회전`, `터렛 오른쪽 회전`, `포신 오른쪽으로 돌려` 같은 뜻이면 `command`는 `turret_rotate_right`
+- 포탑 상하 명령:
+  - `포탑 위로`, `포신 위로`, `상승`, `올려`, `위로 회전` 같은 뜻이면 `command`는 `turret_up`
+  - `포탑 아래로`, `포신 아래로`, `하강`, `내려`, `밑으로` 같은 뜻이면 `command`는 `turret_down`
 - Player 1 이동 명령의 수치 규칙:
   - 전진/후진에서 시간이 명시되면 그 시간을 `data`에 넣는다. 예: `1초간 전진` -> `1.0`
   - 전진/후진에서 시간이 명시되지 않으면 `data`는 기본값 `1.0` 이다.
-  - 좌우 회전에서 각도가 `90도`면 `data`는 `90.0` 이다.
-  - 좌우 회전에서 각도가 명시되지 않으면 `data`는 기본값 `90.0` 이다.
+  - 본체 좌우 회전은 시간 기반 명령이다. 예: `2초간 왼쪽으로 회전` -> `command = pivot_left`, `data = 2.0`
+  - 본체 좌우 회전에서 각도로 표현되면 `data`에는 각도 값을 그대로 넣는다. 수신 측은 `1초 = 45도` 규칙으로 해석한다. 예: `왼쪽 90도 회전` -> `command = pivot_left`, `data = 90.0`
+  - 본체 좌우 회전에서 시간이나 각도가 명시되지 않으면 `data`는 기본값 `1.0` 이다.
+  - 포탑 좌우 회전도 본체 좌우 회전과 같은 규칙을 쓴다. 시간이 명시되면 그 시간을 `data`에 넣고, 각도로 표현되면 각도 값을 그대로 넣는다. 수신 측은 `1초 = 45도` 규칙으로 해석한다.
+  - 예: `2초간 포탑 왼쪽 회전` -> `command = turret_rotate_left`, `data = 2.0`
+  - 예: `포탑을 왼쪽으로 90도 회전` -> `command = turret_rotate_left`, `data = 90.0`
+  - 포탑 좌우 회전에서 시간이나 각도가 명시되지 않으면 `data`는 기본값 `1.0` 이다.
+  - 포탑 상하는 시간 기반 명령이다. 예: `2초간 포신 위로` -> `command = turret_up`, `data = 2.0`
+  - 포탑 상하에서 시간이 명시되지 않으면 `data`는 기본값 `1.0` 이다.
 - 기존 간단 명령:
   - 사용자의 뜻이 `재장전`, `장전`, `리로드`, `탄창 갈아`, `탄약 채워`, `reload` 를 포함하거나 내포하면 `command`는 `reload`, `data`는 `0.0`
   - 사용자의 뜻이 `적 위치 스캔`, `적 탐색`, `레이더 작동`, `스캔 시작`, `주변 수색`, `scanning` 을 포함하거나 내포하면 `command`는 `scanning`, `data`는 `0.0`
+  - 사용자의 뜻이 `발사`, `사격`, `쏴`, `쏘아`, `shoot`, `fire` 를 포함하거나 내포하면 `command`는 `fire`, `data`는 `0.0`
   - 위 규칙으로 명확하게 매핑되지 않으면 `command`는 `reject`, `data`는 `0.0`
 
 출력 예시 1:
@@ -77,6 +91,58 @@
 
 출력 예시 4:
 
+입력: 2초간 포탑 왼쪽으로 회전해
+
+출력:
+{
+  "role": "player3_voice",
+  "result": {
+    "command": "turret_rotate_left",
+    "data": 2.0
+  }
+}
+
+출력 예시 5:
+
+입력: 포탑을 왼쪽으로 90도 회전해
+
+출력:
+{
+  "role": "player3_voice",
+  "result": {
+    "command": "turret_rotate_left",
+    "data": 90.0
+  }
+}
+
+출력 예시 6:
+
+입력: 포신 위로 올려
+
+출력:
+{
+  "role": "player3_voice",
+  "result": {
+    "command": "turret_up",
+    "data": 1.0
+  }
+}
+
+출력 예시 7:
+
+입력: 발사
+
+출력:
+{
+  "role": "player3_voice",
+  "result": {
+    "command": "fire",
+    "data": 0.0
+  }
+}
+
+출력 예시 8:
+
 입력: 앞으로 가
 
 출력:
@@ -88,7 +154,7 @@
   }
 }
 
-출력 예시 5:
+출력 예시 9:
 
 입력: 오늘 날씨 어때
 

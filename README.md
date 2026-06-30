@@ -70,6 +70,7 @@ Currently allowed command values:
 All outgoing network packets now use role `player3_voice`.
 When no command is active, the loop continuously sends `{"command":"none","data":0.0}` at about 10 fps.
 Timed movement commands are repeated on that same stream for their active duration.
+For body pivot and turret left/right rotation, angle-based commands use the rule `45 degrees = 1.0 second`.
 One-shot commands such as `reload` and `scanning` are injected once into that stream.
 
 ## Prerequisites

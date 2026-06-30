@@ -14,7 +14,20 @@
       "properties": {
         "command": {
           "type": "string",
-          "enum": ["move_forward", "move_backward", "pivot_left", "pivot_right", "reload", "scanning", "reject"]
+          "enum": [
+            "move_forward",
+            "move_backward",
+            "pivot_left",
+            "pivot_right",
+            "turret_rotate_left",
+            "turret_rotate_right",
+            "turret_up",
+            "turret_down",
+            "reload",
+            "scanning",
+            "fire",
+            "reject"
+          ]
         },
         "data": {
           "type": "number"
