@@ -10,6 +10,7 @@ import termios
 import threading
 import time
 import tty
+import wave
 from pathlib import Path
 from urllib import error, request
 
@@ -30,6 +31,7 @@ DEFAULT_TRIGGER_KEY = "space"
 DEFAULT_QUIT_KEY = "q"
 DEFAULT_TRIGGER_INPUT_MODE = "auto"
 DEFAULT_TRIGGER_EVENT_DEVICE = "auto"
+MIN_COMMAND_AUDIO_SECONDS = 0.2
 
 INPUT_EVENT_STRUCT = struct.Struct("llHHI")
 INPUT_EVENT_TYPE_KEY = 0x01
@@ -376,8 +378,17 @@ def wait_for_event_key(trigger_key: str, quit_key: str, trigger_key_code: int, q
 
 def run_command_cycle(args: argparse.Namespace, event_devices: list[Path], trigger_key_code: int) -> bool:
     command_audio_path = record_command_audio(args, event_devices, trigger_key_code)
+    if command_audio_path is None:
+        return True
+
     transcriber, _, _, _, _ = build_transcriber(args)
-    transcript = transcribe_audio_path(args, transcriber, command_audio_path)
+    try:
+        transcript = transcribe_audio_path(args, transcriber, command_audio_path)
+    except SttError as exc:
+        if str(exc) == "transcript is empty":
+            print(stage_message("STT", "Skipped empty transcript from a very short button press"), flush=True)
+            return True
+        raise
 
     try:
         process_transcript(args, transcript)
@@ -388,7 +399,7 @@ def run_command_cycle(args: argparse.Namespace, event_devices: list[Path], trigg
     return True
 
 
-def record_command_audio(args: argparse.Namespace, event_devices: list[Path], trigger_key_code: int) -> Path:
+def record_command_audio(args: argparse.Namespace, event_devices: list[Path], trigger_key_code: int) -> Path | None:
     transcriber, _, _, _, _ = build_transcriber(args)
     command_audio_path = Path(args.record_output)
     record_started_at = time.perf_counter()
@@ -411,17 +422,34 @@ def record_command_audio(args: argparse.Namespace, event_devices: list[Path], tr
         flush=True,
     )
     try:
-        transcriber.record_audio_until_stop(
-            command_audio_path,
-            stop_event=stop_event,
-            device=args.record_device,
-            max_seconds=safety_limit,
-        )
+        try:
+            transcriber.record_audio_until_stop(
+                command_audio_path,
+                stop_event=stop_event,
+                device=args.record_device,
+                max_seconds=safety_limit,
+            )
+        except SttError as exc:
+            if str(exc) == "recording produced no audio":
+                print(stage_message("RECORD", "Ignored very short button tap because no audio was captured"), flush=True)
+                return None
+            raise
     finally:
         stop_event.set()
         release_watcher.join(timeout=1.0)
 
     elapsed = time.perf_counter() - record_started_at
+    audio_duration_seconds = measure_wav_duration_seconds(command_audio_path)
+    if audio_duration_seconds < MIN_COMMAND_AUDIO_SECONDS:
+        print(
+            stage_message(
+                "RECORD",
+                f"Ignored short recording ({audio_duration_seconds:.3f}s < {MIN_COMMAND_AUDIO_SECONDS:.1f}s)",
+            ),
+            flush=True,
+        )
+        return None
+
     print(stage_message("RECORD", f"Command audio saved to {command_audio_path} (elapsed={format_elapsed(elapsed)})"), flush=True)
     return command_audio_path
 
@@ -450,6 +478,21 @@ def wait_for_event_key_release(trigger_key_code: int, event_devices: list[Path],
     finally:
         for _event_device, event_stream in streams:
             event_stream.close()
+
+
+def measure_wav_duration_seconds(audio_path: Path) -> float:
+    if not audio_path.exists():
+        return 0.0
+
+    try:
+        with wave.open(str(audio_path), "rb") as wav_file:
+            frame_rate = wav_file.getframerate()
+            frame_count = wav_file.getnframes()
+            if frame_rate <= 0:
+                return 0.0
+            return frame_count / frame_rate
+    except wave.Error:
+        return 0.0
 
 
 def resolve_key_spec(key_spec: str) -> str:
